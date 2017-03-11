@@ -209,15 +209,15 @@ class detector:
         w_binary[(b > 200) & (g > 200) & (r > 200)] = 1
 
         # Store the binary image
-        self.s_binary = s_binary + w_binary
+        self.s_binary = np.add(s_binary,w_binary)
 
         if debug:
             # Plot the result
             f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
             f.tight_layout()
-            ax1.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            ax1.set_title('Original Image', fontsize=50)
-            ax2.imshow(self.s_binary, cmap='gray')
+            ax1.imshow(s_channel, cmap='gray')
+            ax1.set_title('S Image', fontsize=50)
+            ax2.imshow(s_binary, cmap='gray')
             ax2.set_title('Thresholded S', fontsize=50)
             plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
             plt.show()
@@ -376,7 +376,7 @@ class detector:
             plt.plot(right_fitx, self.ploty, color='yellow')
             plt.xlim(0, 1280)
             plt.ylim(720, 0)
-            plt.show(block=False)
+            plt.show()
 
     def calc_curvature(self, debug = False):
         y_eval = np.max(self.ploty)
@@ -412,7 +412,8 @@ class detector:
 
     def process_image(self, image, show_debug = False):
         offset = 200
-        src = np.array([[600, 450], [700,450], [1100,719], [200, 719]], np.float32)
+        img_size = (image.shape[0], image.shape[1])
+        src = np.array([[400, 350], [800,350], [1000,700], [200, 700]], np.float32)
         dst = np.array([[offset, 0], [image.shape[1]-offset, 0], [image.shape[1]-offset, image.shape[0]], [offset, image.shape[0]]], np.float32)
         self.undistort_image(image, debug = show_debug)
         self.perspective_transform(self.undistorted, src, dst, debug = show_debug)
@@ -427,7 +428,7 @@ class detector:
         self.draw_frame(debug = show_debug)
 
 
-    def process_stream(self, path):
+    def process_stream(self, path, debug = False):
         import skvideo.io
         # open stream
         stream = skvideo.io.vread(path)
@@ -436,14 +437,28 @@ class detector:
 
         for frame in stream:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            self.process_image(frame, show_debug=False)
+            self.process_image(frame, show_debug=debug)
             cv2.imshow("out", self.result)
             cv2.waitKey(1)
 
         stream.release()
         cv2.destroyAllWindows()
 
-
+# create lane object
+myLanes = detector(debug_duration=2000)
+# calibrate camera
+myLanes.get_calibration(file_path='./camera_cal/calibration*.jpg', debug=False)
+# process image
+# image = cv2.imread('./test_images/test6.jpg')
+# cv2.imshow("input_image", image)
+# cv2.waitKey(500)
+# #myLanes.color_thresh(image, debug=True)
+# myLanes.process_image(image, show_debug=True)
+# cv2.imshow("output_image", myLanes.result)
+# cv2.waitKey(0)
+# cv2.destroyAllWindows()
+# process video
+myLanes.process_stream(path ='challenge_video.mp4', debug = True)
 
 
 
