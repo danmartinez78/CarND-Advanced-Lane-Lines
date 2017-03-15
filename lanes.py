@@ -3,29 +3,6 @@ import matplotlib.pyplot as plt
 import glob
 import cv2
 
-class lane_line:
-    def __init__(self):
-        # was the line detected in the last iteration?
-        self.detected = False
-        # x values of the last n fits of the line
-        self.recent_xfitted = []
-        # average x values of the fitted line over the last n iterations
-        self.bestx = None
-        # polynomial coefficients averaged over the last n iterations
-        self.best_fit = None
-        # polynomial coefficients for the most recent fit
-        self.current_fit = [np.array([False])]
-        # radius of curvature of the line in some units
-        self.radius_of_curvature = None
-        # distance in meters of vehicle center from the line
-        self.line_base_pos = None
-        # difference in fit coefficients between last and new fits
-        self.diffs = np.array([0, 0, 0], dtype='float')
-        # x values for detected line pixels
-        self.allx = None
-        # y values for detected line pixels
-        self.ally = None
-
 class detector:
     def __init__(self, debug_duration = 500, debug_bool = False):
         # calibration params
@@ -45,19 +22,22 @@ class detector:
         self.grady = None
         self.mag_binary = None
         self.combined_grad_binary = None
-        self.s_binary = None
+        self.color_binary = None
         self.final_binary = None
         self.dir_binary = None
 
         # were lines detected in the last iteration?
         self.detected = False
 
-        # detected line polynomials
+        # detected line objects
+        # self.left = LaneLine()
+        # self.right = LaneLine()
+        # self.avg = LaneLine()
         self.left_fit = None
-        self.right_fit = None
         self.left_fitx = None
+        self.right_fit = None
         self.right_fitx = None
-        self.ploty = np.linspace(0, 719, num=720)
+        self.ploty = None
         self.debug_duration = debug_duration
         self.debug_bool = debug_bool
 
@@ -98,146 +78,48 @@ class detector:
 
         cv2.destroyAllWindows()
         self.ret, self.mtx, self.dist, rvecs, tvecs = cv2.calibrateCamera(objpoints, imgpoints, gray.shape[::-1], None, None)
-        print(self.ret)
 
     def undistort_image(self, image, debug = False):
         # if self.ret:
-        self.undistorted = cv2.undistort(image, self.mtx, self.dist, None, self.mtx)
-        if debug:
-            print("undistorted")
-            cv2.imshow('debug', self.undistorted)
-            cv2.waitKey(self.debug_duration)
+        return cv2.undistort(image, self.mtx, self.dist, None, self.mtx)
 
-    def perspective_transform(self, img, src, dst, debug = False):
 
-        # Compute and apply perpective transform
-        img_size = (img.shape[1], img.shape[0])
+    def perspective_transform(self, image, src, dst, debug = False):
+        # Compute and apply perspective transform
+        img_size = (image.shape[0], image.shape[1])
         self.M = cv2.getPerspectiveTransform(src, dst)
-        self.warped = cv2.warpPerspective(img, self.M, img_size, flags=cv2.INTER_NEAREST)  # keep same size as input image
-        if debug:
-            print("warped")
-            cv2.imshow('debug', self.warped)
-            cv2.waitKey(self.debug_duration)
+        return cv2.warpPerspective(image, M, img_size, flags=cv2.INTER_NEAREST)  # keep same size as input image
 
-    def abs_sobel_thresh(self, img, orient = 'x', thresh_min=10, thresh_max=255, debug = False, sobel_kernel=3):
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        # Apply x or y gradient with the OpenCV Sobel() function
-        # and take the absolute value
-        if orient == 'x':
-             abs_sobel = np.absolute(cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel))
-        if orient == 'y':
-             abs_sobel = np.absolute(cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel))
-        # Rescale back to 8 bit integer
-        #scaled_sobel = np.uint8(255 * abs_sobel / np.max(abs_sobel))
-        # Create a copy and apply the threshold
-        binary_output = np.zeros_like(abs_sobel, dtype=np.uint8)
-        # Here I'm using inclusive (>=, <=) thresholds, but exclusive is ok too
-        binary_output[(abs_sobel >= thresh_min) & (abs_sobel <= thresh_max)] = 1
+    def color_thresh (self, image, h_thresh=(10, 45), s_thresh=(60, 255), v_thresh=(90, 255)):
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        h_channel = hsv[:, :, 0]
+        s_channel = hsv[:, :, 1]
+        v_channel = hsv[:, :, 2]
 
-        # Store the result
-        if orient == 'x':
-            self.gradx = np.copy(binary_output)
-        else:
-            self.grady = np.copy(binary_output)
+        # segment yellow lane markings
+        hsv_binary = np.zeros_like(h_channel)
+        h = np.zeros_like(h_channel)
+        s = np.zeros_like(h_channel)
+        v = np.zeros_like(h_channel)
 
-        if debug:
-            print("abs_sobel")
-            cv2.imshow('debug', binary_output*255)
-            cv2.waitKey(self.debug_duration)
+        h[(h_channel > h_thresh[0]) & (h_channel <= h_thresh[1])] = 1
+        s[(s_channel > s_thresh[0]) & (s_channel <= s_thresh[1])] = 1
+        v[(v_channel > v_thresh[0]) & (v_channel <= v_thresh[1])] = 1
 
-    def mag_thresh(self, img, sobel_kernel=3, mag_thresh=(10, 255), debug = False):
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        # Take both Sobel x and y gradients
-        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
-        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
-        # Calculate the gradient magnitude
-        gradmag = np.sqrt(sobelx ** 2 + sobely ** 2)
-        # Create a binary image of ones where threshold is met, zeros otherwise
-        binary_output = np.zeros_like(gradmag, dtype=np.uint8)
-        binary_output[(gradmag >= mag_thresh[0]) & (gradmag <= mag_thresh[1])] = 1
-        # Store the binary image
-        self.mag_binary = binary_output
+        hsv_binary[(h==1)&(s==1)&(v==1)] = 1
 
-        if debug:
-            print("mag_thresh")
-            cv2.imshow('debug', binary_output*255)
-            cv2.waitKey(self.debug_duration)
-
-    def dir_threshold(self, img, sobel_kernel=5, thresh=(0.6, 1.6), debug = False):
-        # Grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        # Calculate the x and y gradients
-        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
-        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
-        # Take the absolute value of the gradient direction,
-        # apply a threshold, and create a binary image result
-        absgraddir = np.arctan2(np.absolute(sobely), np.absolute(sobelx))
-        binary_output = np.zeros_like(absgraddir, dtype=np.uint8)
-        binary_output[(absgraddir >= thresh[0]) & (absgraddir <= thresh[1])] = 1
-
-        # Store the binary image
-        self.dir_binary = binary_output
-
-        if debug:
-            print("dir_thresh")
-            cv2.imshow('debug', binary_output*255)
-            cv2.waitKey(self.debug_duration)
-
-    def gradient_thresh(self, debug = False):
-        combined = np.zeros_like(self.dir_binary, dtype=np.uint8)
-        combined[((self.gradx == 1) & (self.grady == 1)) | ((self.mag_binary == 1) & (self.dir_binary == 1))] = 1
-        self.combined_grad_binary = combined
-
-        if debug:
-            print("combined_grad_thresh")
-            cv2.imshow('debug', combined*255)
-            cv2.waitKey(self.debug_duration)
-
-    def color_thresh (self, image, thresh=(90, 255), debug = False):
-        hls = cv2.cvtColor(image, cv2.COLOR_BGR2HLS)
-        s_channel = hls[:, :, 2]
-        s_binary = np.zeros_like(s_channel)
-        s_binary[(s_channel > thresh[0]) & (s_channel <= thresh[1])] = 1
-
+        # segment white lane markings
         b = image[:, :, 0]
         g = image[:, :, 1]
         r = image[:, :, 2]
 
         w_binary = np.zeros_like(b)
-        w_binary[(b > 200) & (g > 200) & (r > 200)] = 1
+        w_binary[(b > 195) & (g > 195) & (r > 195)] = 1
 
-        # Store the binary image
-        self.s_binary = np.add(s_binary,w_binary)
+        # Combine and store the binary image
+        return np.add(hsv_binary, w_binary)
 
-        if debug:
-            # Plot the result
-            f, (ax1, ax2) = plt.subplots(1, 2, figsize=(24, 9))
-            f.tight_layout()
-            ax1.imshow(s_channel, cmap='gray')
-            ax1.set_title('S Image', fontsize=50)
-            ax2.imshow(s_binary, cmap='gray')
-            ax2.set_title('Thresholded S', fontsize=50)
-            plt.subplots_adjust(left=0., right=1, top=0.9, bottom=0.)
-            plt.show()
-            print("s_binary")
-            cv2.imshow('debug', self.s_binary*255)
-            cv2.imshow('warped', self.warped)
-            cv2.waitKey(0)
-
-    def final_thresh(self, debug=False):
-        final_binary = np.zeros_like(self.s_binary, dtype=np.uint8)
-        final_binary[(self.s_binary == 1) | (self.combined_grad_binary == 1)] = 1
-        self.final_binary = final_binary
-
-        if debug:
-            print("final_binary")
-            cv2.imshow('debug', final_binary*255)
-            cv2.waitKey(self.debug_duration)
-
-    def find_lane_lines(self, debug = False):
-        binary_warped = self.final_binary
+    def find_lane_lines(self, binary_warped, debug = False):
         self.ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
         if not self.detected:
             # Assuming you have created a warped binary image called "binary_warped"
@@ -269,7 +151,6 @@ class detector:
             # Create empty lists to receive left and right lane pixel indices
             left_lane_inds = []
             right_lane_inds = []
-            self.detected = True
 
             # Step through the windows one by one
             for window in range(nwindows):
@@ -301,16 +182,6 @@ class detector:
             left_lane_inds = np.concatenate(left_lane_inds)
             right_lane_inds = np.concatenate(right_lane_inds)
 
-            # Extract left and right line pixel positions
-            leftx = nonzerox[left_lane_inds]
-            lefty = nonzeroy[left_lane_inds]
-            rightx = nonzerox[right_lane_inds]
-            righty = nonzeroy[right_lane_inds]
-
-            # Fit a second order polynomial to each
-            left_fit = np.polyfit(lefty, leftx, 2)
-            right_fit = np.polyfit(righty, rightx, 2)
-
         else:
             left_fit = self.left_fit
             right_fit = self.right_fit
@@ -325,33 +196,38 @@ class detector:
             (nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] - margin)) & (
             nonzerox < (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy + right_fit[2] + margin)))
 
-            # Again, extract left and right line pixel positions
-            leftx = nonzerox[left_lane_inds]
-            lefty = nonzeroy[left_lane_inds]
-            rightx = nonzerox[right_lane_inds]
-            righty = nonzeroy[right_lane_inds]
-            # Fit a second order polynomial to each
-            left_fit = np.polyfit(lefty, leftx, 2)
-            right_fit = np.polyfit(righty, rightx, 2)
+        # Extract left and right line pixel positions
+        leftx = nonzerox[left_lane_inds]
+        lefty = nonzeroy[left_lane_inds]
+        rightx = nonzerox[right_lane_inds]
+        righty = nonzeroy[right_lane_inds]
+        print("num-leftx:", len(leftx), "num-rightx:", len(rightx))
 
-        left_fitx = left_fit[0] * self.ploty ** 2 + left_fit[1] * self.ploty + left_fit[2]
-        right_fitx = right_fit[0] * self.ploty ** 2 + right_fit[1] * self.ploty + right_fit[2]
-        # store values
-        self.left_fitx = left_fitx
-        self.left_fit = left_fit
-        self.right_fitx = right_fitx
-        self.right_fit = right_fit
+        # Fit a second order polynomial to each
+        if len(leftx) > 2000: # and len(leftx) < 10000 :
+            left_fit = np.polyfit(lefty, leftx, 2)
+        else:
+            left_fit = self.left_fit
+
+        if len(rightx) > 2000: #and len(rightx) < 10000:
+            right_fit = np.polyfit(righty, rightx, 2)
+        else:
+            right_fit = self.right_fit
+
+        if self.left_fit != None:
+            # sanity checks needed here
+            alpha = 0.1
+            self.left_fit = alpha * left_fit + (1. - alpha) * self.left_fit
+            self.right_fit = alpha * right_fit + (1. - alpha) * self.right_fit
+        else:
+            self.left_fit = left_fit
+            self.right_fit = right_fit
+
+        self.left_fitx = self.left_fit[0] * self.ploty ** 2 + self.left_fit[1] * self.ploty + self.left_fit[2]
+        self.right_fitx = self.right_fit[0] * self.ploty ** 2 + self.right_fit[1] * self.ploty + self.right_fit[2]
+
         if debug:
-            # out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
-            # out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
-            # cv2.imshow("debug", out_img)
-            # plt.plot(left_fitx, self.ploty, color='yellow')
-            # plt.plot(right_fitx, self.ploty, color='yellow')
-            # plt.xlim(0, 1280)
-            # plt.ylim(720, 0)
-            # print("waiting")
-            # cv2.waitKey(self.debug_duration)
-            # Create an image to draw on and an image to show the selection window
+            margin = 100
             out_img = np.dstack((binary_warped, binary_warped, binary_warped)) * 255
             window_img = np.zeros_like(out_img)
             # Color in left and right line pixels
@@ -360,35 +236,34 @@ class detector:
 
             # Generate a polygon to illustrate the search window area
             # And recast the x and y points into usable format for cv2.fillPoly()
-            left_line_window1 = np.array([np.transpose(np.vstack([left_fitx - margin, self.ploty]))])
-            left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx + margin, self.ploty])))])
+            left_line_window1 = np.array([np.transpose(np.vstack([self.left_fitx - margin, self.ploty]))])
+            left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([self.left_fitx + margin, self.ploty])))])
             left_line_pts = np.hstack((left_line_window1, left_line_window2))
-            right_line_window1 = np.array([np.transpose(np.vstack([right_fitx - margin, self.ploty]))])
-            right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx + margin, self.ploty])))])
+            right_line_window1 = np.array([np.transpose(np.vstack([self.right_fitx - margin, self.ploty]))])
+            right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([self.right_fitx + margin, self.ploty])))])
             right_line_pts = np.hstack((right_line_window1, right_line_window2))
 
             # Draw the lane onto the warped blank image
+            plt.clf()
             cv2.fillPoly(window_img, np.int_([left_line_pts]), (0, 255, 0))
             cv2.fillPoly(window_img, np.int_([right_line_pts]), (0, 255, 0))
             result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
             plt.imshow(result)
-            plt.plot(left_fitx, self.ploty, color='yellow')
-            plt.plot(right_fitx, self.ploty, color='yellow')
+            plt.plot(self.left_fitx, self.ploty, color='yellow')
+            plt.plot(self.right_fitx, self.ploty, color='yellow')
             plt.xlim(0, 1280)
             plt.ylim(720, 0)
-            plt.show()
+            plt.show(block = False)
+            plt.pause(0.05)
 
-    def calc_curvature(self, debug = False):
         y_eval = np.max(self.ploty)
         left_curverad = ((1 + (2 * self.left_fit[0] * y_eval + self.left_fit[1]) ** 2) ** 1.5) / np.absolute(2 * self.left_fit[0])
         right_curverad = ((1 + (2 * self.right_fit[0] * y_eval + self.right_fit[1]) ** 2) ** 1.5) / np.absolute(2 * self.right_fit[0])
-        if debug:
-            print(left_curverad, right_curverad)
+        avg_curverad = (left_curverad + right_curverad)/2.
+        return left_curverad, right_curverad, avg_curverad
 
-    def draw_frame(self, debug = False):
+    def draw_frame(self, undist, warped):
         # Create an image to draw the lines on
-        undist = self.undistorted
-        warped = self.final_binary
         warp_zero = np.zeros_like(warped).astype(np.uint8)
         color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
 
@@ -403,32 +278,22 @@ class detector:
         Minv = np.linalg.inv(self.M)
         newwarp = cv2.warpPerspective(color_warp, Minv, (undist.shape[1], undist.shape[0]))
         # Combine the result with the original image
-        self.result = cv2.addWeighted(undist, 1, newwarp, 0.5, 0)
+        return cv2.addWeighted(undist, 1, newwarp, 0.5, 0)
+
+    def process_image(self, image, debug=False):
+        src = np.array([[585, 460], [203, 720], [1127,720], [695, 460]], np.float32)
+        dst = np.array([[320, 0], [320, 720], [960,720], [960, 0]], np.float32)
+        undistorted = self.undistort_image(image, debug = False)
+        warped = self.perspective_transform(undistorted, src, dst)
+        binary_warped = self.color_thresh(warped, h_thresh=(5, 100), s_thresh=(90, 255), v_thresh=(50, 255))
+        left_rad, right_rad, avg_rad = self.find_lane_lines(binary_warped)
+        output = self.draw_frame(undistorted, binary_warped)
+
         if debug:
-            print("final_lanes")
-            cv2.imshow("debug", self.result)
-            cv2.imwrite('result.jpg', self.result)
-            cv2.waitKey(self.debug_duration)
-
-    def process_image(self, image, show_debug = False):
-        offset = 200
-        img_size = (image.shape[0], image.shape[1])
-        src = np.array([[400, 350], [800,350], [1000,700], [200, 700]], np.float32)
-        dst = np.array([[offset, 0], [image.shape[1]-offset, 0], [image.shape[1]-offset, image.shape[0]], [offset, image.shape[0]]], np.float32)
-        self.undistort_image(image, debug = show_debug)
-        self.perspective_transform(self.undistorted, src, dst, debug = show_debug)
-        self.abs_sobel_thresh(self.warped, 'x', debug = show_debug)
-        self.abs_sobel_thresh(self.warped, 'y', debug = show_debug)
-        self.dir_threshold(self.warped, debug = show_debug)
-        self.mag_thresh(self.warped, debug = show_debug)
-        self.color_thresh(self.warped, debug = show_debug)
-        self.final_thresh(debug = show_debug)
-        self.find_lane_lines(debug = show_debug)
-        self.calc_curvature(debug = show_debug)
-        self.draw_frame(debug = show_debug)
+            None
 
 
-    def process_stream(self, path, debug = False):
+    def process_stream(self, path, debug_flag = False):
         import skvideo.io
         # open stream
         stream = skvideo.io.vread(path)
@@ -437,7 +302,7 @@ class detector:
 
         for frame in stream:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            self.process_image(frame, show_debug=debug)
+            self.process_image(frame, debug_flag = debug_flag, use_gradient=False)
             cv2.imshow("out", self.result)
             cv2.waitKey(1)
 
@@ -445,9 +310,22 @@ class detector:
         cv2.destroyAllWindows()
 
 # create lane object
-myLanes = detector(debug_duration=2000)
+myLanes = detector(debug_duration=500)
 # calibrate camera
 myLanes.get_calibration(file_path='./camera_cal/calibration*.jpg', debug=False)
+
+img = cv2.imread('./camera_cal/calibration1.jpg')
+myLanes.undistort_image(img, debug=True)
+cv2.waitKey(0)
+
+src = np.array([[585, 460], [203, 720], [1127, 720], [695, 460]], np.float32)
+dst = np.array([[320, 0], [320, 720], [960, 720], [960, 0]], np.float32)
+
+image = cv2.imread('./test_images/straight_lines1.jpg')
+
+myLanes.perspective_transform(image, smooth= False, debug=True, src = src, dst=dst)
+cv2.waitKey(0)
+
 # process image
 # image = cv2.imread('./test_images/test6.jpg')
 # cv2.imshow("input_image", image)
@@ -458,7 +336,7 @@ myLanes.get_calibration(file_path='./camera_cal/calibration*.jpg', debug=False)
 # cv2.waitKey(0)
 # cv2.destroyAllWindows()
 # process video
-myLanes.process_stream(path ='challenge_video.mp4', debug = True)
+# myLanes.process_stream(path ='challenge_video.mp4', debug_flag=True)
 
 
 
