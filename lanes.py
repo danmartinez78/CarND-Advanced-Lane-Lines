@@ -206,7 +206,6 @@ class detector:
         lefty = nonzeroy[left_lane_inds]
         rightx = nonzerox[right_lane_inds]
         righty = nonzeroy[right_lane_inds]
-        # print("num-leftx:", len(leftx), "num-rightx:", len(rightx))
 
         # Fit a second order polynomial to each
         if len(leftx) > 2000:
@@ -221,7 +220,7 @@ class detector:
 
         if self.left_fit != None:
             # sanity checks needed here
-            alpha = 0.1
+            alpha = 0.2
             self.left_fit = alpha * left_fit + (1. - alpha) * self.left_fit
             self.right_fit = alpha * right_fit + (1. - alpha) * self.right_fit
         else:
@@ -262,6 +261,7 @@ class detector:
             plt.pause(0.05)
 
         y_eval = np.max(self.ploty)
+        midx = binary_warped.shape[1]/2.
         # Define conversions in x and y from pixels space to meters
         ym_per_pix = 30 / 720  # meters per pixel in y dimension
         xm_per_pix = 3.7 / 700  # meters per pixel in x dimension
@@ -274,8 +274,9 @@ class detector:
             2 * left_fit_cr[0])
         right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
             2 * right_fit_cr[0])
+        position_from_center = ((self.left_fitx[-1] + self.right_fitx[-1]) / 2. - midx) * xm_per_pix
 
-        return left_curverad, right_curverad
+        return left_curverad, right_curverad, position_from_center
 
     def draw_frame(self, undist, warped):
         # Create an image to draw the lines on
@@ -300,46 +301,55 @@ class detector:
         dst = np.array([[320, 0], [320, 720], [900,720], [900, 0]], np.float32)
         undistorted = self.undistort_image(image)
         warped = self.perspective_transform(undistorted, src, dst)
-        binary_warped = self.color_thresh(warped, h_thresh=(10, 45), s_thresh=(90, 255), v_thresh=(90, 150))
-        left_curverad, right_curverad = self.find_lane_lines(binary_warped, debug=False)
+        binary_warped = self.color_thresh(warped, h_thresh=(10, 80), s_thresh=(75, 255), v_thresh=(75, 255))
+        left_curverad, right_curverad, pos = self.find_lane_lines(binary_warped, debug=debug_flag)
+        avg_radius = (left_curverad + right_curverad)/2.
         output = self.draw_frame(undistorted, binary_warped)
-        print(left_curverad, 'm', right_curverad, 'm')
+        # write radius of curvature and mid_distance
+        cv2.putText(output, 'Radius of Curvature: %.2fm' % avg_radius, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        if pos > 0:
+            cv2.putText(output, 'Distance From Center: %.2fm %s' % (np.absolute(pos), 'left'), (20, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        else:
+            cv2.putText(output, 'Distance From Center: %.2fm %s' % (np.absolute(pos), 'right'), (20, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         if debug_flag:
             cv2.imshow("warped", warped)
             cv2.imshow("Binary", binary_warped*255)
             cv2.imshow("out", output)
             cv2.waitKey(100)
-        else:
-            cv2.imshow("out", output)
-            cv2.waitKey(1)
+        # else:
+        #     cv2.imshow("out", output)
+        #     cv2.waitKey(1)
 
-    def process_stream(self, path, debug_flag = False):
+        return output
+
+    def process_stream(self, path, save = False, debug_flag = False):
         import skvideo.io
         # open stream
         stream = skvideo.io.vread(path)
         cv2.waitKey(500)
         print("got stream")
-
+        writer = skvideo.io.FFmpegWriter("result.mp4", outputdict={'-r': '10'})
         for frame in stream:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            self.process_image(frame, debug_flag = debug_flag)
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            output = self.process_image(frame, debug_flag = debug_flag)
+            if save:
+                # write to video
+                writer.writeFrame(cv2.cvtColor(output, cv2.COLOR_BGR2RGB))
             cv2.waitKey(1)
 
         stream.release()
         cv2.destroyAllWindows()
+        writer.close()
 
 # create lane object
 myLanes = detector(debug_duration=500)
 # calibrate camera
 myLanes.get_calibration(file_path='./camera_cal/calibration*.jpg', debug=False)
-# process single image
-# image = cv2.imread('./test_images/test6.jpg')
-# myLanes.process_image(image, debug_flag=True)
-# cv2.waitKey(1)
-# cv2.destroyAllWindows()
 # process video
-myLanes.process_stream(path ='project_video.mp4', debug_flag=False)
+myLanes.process_stream(path ='project_video.mp4', debug_flag=False,  save=True)
 
 
 
