@@ -13,26 +13,10 @@ class detector:
         # perspective transform
         self.M = None
 
-        # frame holders
-        self.undistorted = None
-        self.warped = None
-
-        # binary images
-        self.gradx = None
-        self.grady = None
-        self.mag_binary = None
-        self.combined_grad_binary = None
-        self.color_binary = None
-        self.final_binary = None
-        self.dir_binary = None
-
         # were lines detected in the last iteration?
         self.detected = False
 
-        # detected line objects
-        # self.left = LaneLine()
-        # self.right = LaneLine()
-        # self.avg = LaneLine()
+        # detected line params
         self.left_fit = None
         self.left_fitx = None
         self.right_fit = None
@@ -274,9 +258,9 @@ class detector:
             2 * left_fit_cr[0])
         right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
             2 * right_fit_cr[0])
-        position_from_center = ((self.left_fitx[-1] + self.right_fitx[-1]) / 2. - midx) * xm_per_pix
+        pos = ((self.left_fitx[-1] + self.right_fitx[-1]) / 2. - midx) * xm_per_pix
 
-        return left_curverad, right_curverad, position_from_center
+        return left_curverad, right_curverad, pos
 
     def draw_frame(self, undist, warped):
         # Create an image to draw the lines on
@@ -305,7 +289,8 @@ class detector:
         left_curverad, right_curverad, pos = self.find_lane_lines(binary_warped, debug=debug_flag)
         avg_radius = (left_curverad + right_curverad)/2.
         output = self.draw_frame(undistorted, binary_warped)
-        # write radius of curvature and mid_distance
+
+        # write radius of curvature and center_offset
         cv2.putText(output, 'Radius of Curvature: %.2fm' % avg_radius, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         if pos > 0:
             cv2.putText(output, 'Distance From Center: %.2fm %s' % (np.absolute(pos), 'left'), (20, 80),
@@ -345,14 +330,41 @@ class detector:
         writer.close()
 
 # create lane object
-myLanes = detector(debug_duration=500)
+myLanes = detector(debug_duration=5)
+
 # calibrate camera
 myLanes.get_calibration(file_path='./camera_cal/calibration*.jpg', debug=False)
+
 # process video
-myLanes.process_stream(path ='project_video.mp4', debug_flag=False,  save=True)
+#myLanes.process_stream(path ='project_video.mp4', debug_flag=True,  save=False)
 
+# get calibration images for report
+img = cv2.imread('./camera_cal/calibration1.jpg')
+undistorted = myLanes.undistort_image(image=img)
+cv2.imwrite('./output_images/original.jpg', img)
+cv2.imwrite('./output_images/undistorted.jpg', undistorted)
 
+img = cv2.imread('./test_images/test4.jpg')
+undistorted = myLanes.undistort_image(image=img)
+cv2.imwrite('./output_images/original_lanes.jpg', img)
+cv2.imwrite('./output_images/undistorted_lanes.jpg', undistorted)
 
+# binary for report
+binary = myLanes.color_thresh(undistorted, h_thresh=(10, 80), s_thresh=(75, 255), v_thresh=(75, 255))
+cv2.imwrite('./output_images/binary_lanes.jpg', binary*255)
+
+# warped for report
+src = np.array([[585, 460], [203, 720], [1127, 720], [695, 460]], np.float32)
+dst = np.array([[320, 0], [320, 720], [900, 720], [900, 0]], np.float32)
+warped = myLanes.perspective_transform(undistorted, src, dst)
+cv2.imwrite('./output_images/warped_lanes.jpg', warped)
+
+warped_binary = myLanes.perspective_transform(binary, src, dst)
+cv2.imwrite('./output_images/warped_lanes.jpg', warped_binary*255)
+
+# final image for report
+final = myLanes.process_image(image=img)
+cv2.imwrite('./output_images/final_lanes.jpg', final)
 
 
 
